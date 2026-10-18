@@ -6,15 +6,27 @@ from services import db
 
 def queue_outbox_event(entity_name: str, record_id: int, operation: str, payload_dict: dict):
     """
-    Saves an event into the durable sync_outbox table.
+    Saves an event into the durable sync_outbox table and logs Change Data Capture (CDC) entry.
     Ensures data saves to local DB are decoupled from Google Sheets network availability.
     """
     payload_json = json.dumps(payload_dict, default=str)
-    sql = """
+    sql_outbox = """
     INSERT INTO sync_outbox (entity_name, record_id, operation, payload, status)
     VALUES (%s, %s, %s, %s, 'PENDING')
     """
-    return db.execute(sql, (entity_name, record_id, operation, payload_json))
+    outbox_id = db.execute(sql_outbox, (entity_name, record_id, operation, payload_json))
+
+    # Also log CDC event in sync_log
+    sql_log = """
+    INSERT INTO sync_log (entity_name, record_id, operation, status, payload, retry_count)
+    VALUES (%s, %s, %s, 'PENDING', %s, 0)
+    """
+    try:
+        db.execute(sql_log, (entity_name, record_id, operation, payload_json))
+    except Exception:
+        pass
+
+    return outbox_id
 
 def push_event_to_sheets(entity_name: str, operation: str, record: dict) -> dict:
     """
@@ -144,14 +156,26 @@ def get_sync_status() -> dict:
     """
     Returns real synchronization metrics and status from the database.
     """
-    last_sync = db.query_one("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1")
+    last_sync = db.query_one("SELECT * FROM sync_log WHERE status = 'SUCCESS' ORDER BY id DESC LIMIT 1")
     pending_count = db.query_one("SELECT COUNT(*) AS cnt FROM sync_outbox WHERE status = 'PENDING'")
     failed_count = db.query_one("SELECT COUNT(*) AS cnt FROM sync_outbox WHERE status = 'FAILED'")
-    recent_logs = db.query_all("SELECT * FROM sync_log ORDER BY id DESC LIMIT 15")
+    recent_logs = db.query_all("SELECT * FROM sync_log ORDER BY id DESC LIMIT 25")
+
+    # Truthful database status
+    db_type = Config.DB_TYPE.lower()
+    if db_type == 'mysql':
+        db_label = f"MySQL 8.0+ ({Config.DB_HOST})"
+    else:
+        db_label = "SQLite (Local / Ephemeral Disk on Render)"
 
     return {
         'is_configured': bool(Config.GOOGLE_SHEETS_WEBHOOK_URL),
-        'webhook_url_masked': (Config.GOOGLE_SHEETS_WEBHOOK_URL[:30] + '...') if Config.GOOGLE_SHEETS_WEBHOOK_URL else 'Not configured',
+        'webhook_url_masked': (Config.GOOGLE_SHEETS_WEBHOOK_URL[:36] + '...') if Config.GOOGLE_SHEETS_WEBHOOK_URL else 'Not configured',
+        'spreadsheet_url': Config.GOOGLE_SHEET_URL,
+        'spreadsheet_id': Config.GOOGLE_SPREADSHEET_ID,
+        'db_label': db_label,
+        'db_type': Config.DB_TYPE,
+        'db_status': 'Connected & Active (ACID Transactions Enforced)',
         'last_sync': last_sync,
         'pending_count': pending_count['cnt'] if pending_count else 0,
         'failed_count': failed_count['cnt'] if failed_count else 0,

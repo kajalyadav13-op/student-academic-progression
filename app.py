@@ -15,6 +15,20 @@ with app.app_context():
     except Exception as e:
         app.logger.error(f"Database initialization notice: {e}")
 
+@app.context_processor
+def inject_global_settings():
+    db_type = Config.DB_TYPE.lower()
+    if db_type == 'mysql':
+        db_badge = f"MySQL 8.0+ ({Config.DB_HOST})"
+    else:
+        db_badge = "SQLite (Local / Ephemeral Disk)"
+    return {
+        'current_db_badge': db_badge,
+        'current_db_type': Config.DB_TYPE,
+        'google_sheet_url': Config.GOOGLE_SHEET_URL,
+        'google_spreadsheet_id': Config.GOOGLE_SPREADSHEET_ID
+    }
+
 # -----------------------------------------------------------------------------
 # Health Check Endpoint
 # -----------------------------------------------------------------------------
@@ -548,52 +562,327 @@ def gap_year_delete(gap_id):
     return redirect(url_for('student_directory'))
 
 # -----------------------------------------------------------------------------
-# Seminars & Activities Portfolio
+# Progression Chart Page
 # -----------------------------------------------------------------------------
-@app.route('/portfolio')
-def portfolio_directory():
-    """All seminars and activities with category/type filters."""
+@app.route('/progression')
+def progression_chart_page():
+    """Dedicated Progression Analytics and Comparative Student Curve Page."""
+    student_id = request.args.get('student_id', '').strip()
+
+    # Department progression across all semesters 1 to 8
+    sem_progression = db.query_all("""
+        SELECT 
+            semester_number,
+            ROUND(AVG(sgpa), 2) AS avg_sgpa,
+            MAX(sgpa) AS max_sgpa,
+            MIN(sgpa) AS min_sgpa,
+            COUNT(*) AS student_count
+        FROM semesters
+        GROUP BY semester_number
+        ORDER BY semester_number ASC
+    """)
+
+    # Grade distribution breakdown across all subject marks
+    grade_distribution = db.query_all("""
+        SELECT grade, COUNT(*) AS count
+        FROM student_marks
+        GROUP BY grade
+        ORDER BY 
+            CASE grade
+                WHEN 'O' THEN 1
+                WHEN 'A+' THEN 2
+                WHEN 'A' THEN 3
+                WHEN 'B+' THEN 4
+                WHEN 'B' THEN 5
+                WHEN 'C' THEN 6
+                WHEN 'P' THEN 7
+                ELSE 8
+            END
+    """)
+
+    # List of all students for the dropdown comparison
+    all_students = db.query_all("SELECT id, full_name, student_code FROM students ORDER BY full_name ASC")
+
+    # If specific student selected, get their progression curve
+    selected_student = None
+    student_sems = []
+    if student_id and student_id.isdigit():
+        selected_student = db.query_one("SELECT * FROM students WHERE id = %s", (int(student_id),))
+        if selected_student:
+            student_sems = db.query_all("SELECT semester_number, sgpa, cgpa, credits FROM semesters WHERE student_id = %s ORDER BY semester_number ASC", (int(student_id),))
+
+    # Top performers (highest current CGPA)
+    top_performers = db.query_all("""
+        SELECT 
+            s.id, s.full_name, s.student_code, s.admission_year,
+            latest.cgpa, latest.max_sem
+        FROM students s
+        INNER JOIN (
+            SELECT student_id, cgpa, semester_number AS max_sem
+            FROM semesters s1
+            WHERE semester_number = (
+                SELECT MAX(s2.semester_number) FROM semesters s2 WHERE s2.student_id = s1.student_id
+            )
+        ) latest ON s.id = latest.student_id
+        ORDER BY latest.cgpa DESC LIMIT 5
+    """)
+
+    return render_template(
+        'progression.html',
+        sem_progression=sem_progression,
+        grade_distribution=grade_distribution,
+        all_students=all_students,
+        selected_student=selected_student,
+        student_sems=student_sems,
+        selected_student_id=student_id,
+        top_performers=top_performers
+    )
+
+# -----------------------------------------------------------------------------
+# Academic & Marks Page
+# -----------------------------------------------------------------------------
+@app.route('/academics')
+def academics_page():
+    """Master Academic Records, Semesters, and Subject Marks Overview."""
+    student_id = request.args.get('student_id', '').strip()
+    sem_num = request.args.get('semester', '').strip()
+
+    query = """
+        SELECT 
+            sem.*,
+            s.full_name,
+            s.student_code,
+            s.admission_year,
+            (SELECT COUNT(*) FROM student_marks m WHERE m.semester_id = sem.id) AS subject_count
+        FROM semesters sem
+        JOIN students s ON sem.student_id = s.id
+        WHERE 1=1
+    """
+    params = []
+    if student_id and student_id.isdigit():
+        query += " AND sem.student_id = %s"
+        params.append(int(student_id))
+    if sem_num and sem_num.isdigit():
+        query += " AND sem.semester_number = %s"
+        params.append(int(sem_num))
+
+    query += " ORDER BY sem.student_id ASC, sem.semester_number ASC"
+    semesters = db.query_all(query, tuple(params))
+
+    # Summary metrics
+    metrics = db.query_one("""
+        SELECT 
+            COUNT(DISTINCT student_id) AS active_students,
+            COUNT(*) AS total_semesters,
+            ROUND(AVG(sgpa), 2) AS avg_sgpa,
+            ROUND(SUM(credits), 1) AS total_credits_earned
+        FROM semesters
+    """) or {'active_students': 0, 'total_semesters': 0, 'avg_sgpa': 0.0, 'total_credits_earned': 0.0}
+
+    all_students = db.query_all("SELECT id, full_name, student_code FROM students ORDER BY full_name ASC")
+
+    # Fetch marks for listed semesters
+    sem_ids = [s['id'] for s in semesters]
+    marks_by_sem = {}
+    if sem_ids:
+        placeholders = ', '.join(['%s'] * len(sem_ids))
+        marks = db.query_all(f"SELECT * FROM student_marks WHERE semester_id IN ({placeholders}) ORDER BY subject_code ASC", tuple(sem_ids))
+        for m in marks:
+            marks_by_sem.setdefault(m['semester_id'], []).append(m)
+
+    for sem in semesters:
+        sem['marks'] = marks_by_sem.get(sem['id'], [])
+
+    return render_template(
+        'academics.html',
+        semesters=semesters,
+        metrics=metrics,
+        all_students=all_students,
+        current_student_id=student_id,
+        current_sem_num=sem_num
+    )
+
+# -----------------------------------------------------------------------------
+# Seminars Portfolio Page
+# -----------------------------------------------------------------------------
+@app.route('/seminars')
+def seminars_page():
+    """Dedicated Seminars & Conferences Portfolio with Search and Filters."""
+    search = request.args.get('search', '').strip()
+    part_type = request.args.get('type', '').strip()
+    student_id = request.args.get('student_id', '').strip()
+
+    query = """
+        SELECT sem.*, s.full_name, s.student_code
+        FROM seminars sem
+        JOIN students s ON sem.student_id = s.id
+        WHERE 1=1
+    """
+    params = []
+    if search:
+        query += " AND (sem.title LIKE %s OR sem.organizer LIKE %s)"
+        like = f"%{search}%"
+        params.extend([like, like])
+    if part_type:
+        query += " AND sem.participation_type = %s"
+        params.append(part_type)
+    if student_id and student_id.isdigit():
+        query += " AND sem.student_id = %s"
+        params.append(int(student_id))
+
+    query += " ORDER BY sem.event_date DESC"
+    seminars = db.query_all(query, tuple(params))
+
+    # Stats
+    stats = db.query_one("""
+        SELECT 
+            COUNT(*) AS total_seminars,
+            SUM(CASE WHEN participation_type = 'Presenter' THEN 1 ELSE 0 END) AS presenters,
+            SUM(CASE WHEN participation_type = 'Keynote' THEN 1 ELSE 0 END) AS keynotes,
+            SUM(CASE WHEN participation_type = 'Attendee' THEN 1 ELSE 0 END) AS attendees
+        FROM seminars
+    """) or {'total_seminars': 0, 'presenters': 0, 'keynotes': 0, 'attendees': 0}
+
+    all_students = db.query_all("SELECT id, full_name, student_code FROM students ORDER BY full_name ASC")
+
+    return render_template(
+        'seminars.html',
+        seminars=seminars,
+        stats=stats,
+        all_students=all_students,
+        search=search,
+        current_type=part_type,
+        current_student_id=student_id
+    )
+
+@app.route('/seminars/create', methods=['POST'])
+def seminar_create_master():
+    """Add seminar from master seminars directory."""
+    student_id = request.form.get('student_id', '').strip()
+    title = request.form.get('title', '').strip()
+    organizer = request.form.get('organizer', '').strip()
+    event_date = request.form.get('event_date', '').strip()
+    participation_type = request.form.get('participation_type', 'Attendee').strip()
+    certificate_details = request.form.get('certificate_details', '').strip()
+
+    if not student_id or not title or not organizer or not event_date:
+        flash('Student, title, organizer, and date are required.', 'error')
+        return redirect(url_for('seminars_page'))
+
+    try:
+        sem_id = db.execute("""
+            INSERT INTO seminars (student_id, title, organizer, event_date, participation_type, certificate_details)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (int(student_id), title, organizer, event_date, participation_type, certificate_details))
+
+        google_sheets.queue_outbox_event('Seminars', sem_id, 'UPSERT', {
+            'id': sem_id,
+            'student_id': int(student_id),
+            'title': title,
+            'organizer': organizer,
+            'event_date': event_date,
+            'participation_type': participation_type,
+            'certificate_details': certificate_details
+        })
+        flash(f'Seminar "{title}" recorded successfully.', 'success')
+    except Exception as e:
+        flash(f'Error recording seminar: {str(e)}', 'error')
+
+    return redirect(url_for('seminars_page'))
+
+# -----------------------------------------------------------------------------
+# Activities Portfolio Page
+# -----------------------------------------------------------------------------
+@app.route('/activities')
+def activities_page():
+    """Dedicated Extracurricular Activities Portfolio with Category Filters."""
+    search = request.args.get('search', '').strip()
     category = request.args.get('category', '').strip()
     student_id = request.args.get('student_id', '').strip()
 
-    act_query = """
-    SELECT a.*, s.full_name, s.student_code
-    FROM activities a
-    JOIN students s ON a.student_id = s.id
-    WHERE 1=1
+    query = """
+        SELECT a.*, s.full_name, s.student_code
+        FROM activities a
+        JOIN students s ON a.student_id = s.id
+        WHERE 1=1
     """
     params = []
+    if search:
+        query += " AND (a.title LIKE %s OR a.achievement LIKE %s)"
+        like = f"%{search}%"
+        params.extend([like, like])
     if category:
-        act_query += " AND a.category = %s"
+        query += " AND a.category = %s"
         params.append(category)
     if student_id and student_id.isdigit():
-        act_query += " AND a.student_id = %s"
+        query += " AND a.student_id = %s"
         params.append(int(student_id))
 
-    act_query += " ORDER BY a.event_date DESC"
-    activities = db.query_all(act_query, tuple(params))
+    query += " ORDER BY a.event_date DESC"
+    activities = db.query_all(query, tuple(params))
 
-    sem_query = """
-    SELECT sem.*, s.full_name, s.student_code
-    FROM seminars sem
-    JOIN students s ON sem.student_id = s.id
-    """
-    if student_id and student_id.isdigit():
-        sem_query += " WHERE sem.student_id = %s"
-        seminars = db.query_all(sem_query + " ORDER BY sem.event_date DESC", (int(student_id),))
-    else:
-        seminars = db.query_all(sem_query + " ORDER BY sem.event_date DESC")
+    stats = db.query_one("""
+        SELECT 
+            COUNT(*) AS total_activities,
+            SUM(CASE WHEN category = 'Hackathon' THEN 1 ELSE 0 END) AS hackathons,
+            SUM(CASE WHEN achievement IN ('Winner', '1st Runner Up') THEN 1 ELSE 0 END) AS awards,
+            SUM(CASE WHEN category = 'Technical' THEN 1 ELSE 0 END) AS technical
+        FROM activities
+    """) or {'total_activities': 0, 'hackathons': 0, 'awards': 0, 'technical': 0}
 
     all_students = db.query_all("SELECT id, full_name, student_code FROM students ORDER BY full_name ASC")
 
     return render_template(
         'activities.html',
         activities=activities,
-        seminars=seminars,
+        stats=stats,
         all_students=all_students,
+        search=search,
         current_category=category,
         current_student_id=student_id
     )
+
+@app.route('/activities/create', methods=['POST'])
+def activity_create_master():
+    """Add activity from master activities directory."""
+    student_id = request.form.get('student_id', '').strip()
+    title = request.form.get('title', '').strip()
+    category = request.form.get('category', 'Technical').strip()
+    description = request.form.get('description', '').strip()
+    event_date = request.form.get('event_date', '').strip()
+    achievement = request.form.get('achievement', '').strip()
+    certificate_details = request.form.get('certificate_details', '').strip()
+
+    if not student_id or not title or not event_date:
+        flash('Student, title, and event date are required.', 'error')
+        return redirect(url_for('activities_page'))
+
+    try:
+        act_id = db.execute("""
+            INSERT INTO activities (student_id, title, category, description, event_date, achievement, certificate_details)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (int(student_id), title, category, description, event_date, achievement, certificate_details))
+
+        google_sheets.queue_outbox_event('Activities', act_id, 'UPSERT', {
+            'id': act_id,
+            'student_id': int(student_id),
+            'title': title,
+            'category': category,
+            'description': description,
+            'event_date': event_date,
+            'achievement': achievement,
+            'certificate_details': certificate_details
+        })
+        flash(f'Activity "{title}" added successfully.', 'success')
+    except Exception as e:
+        flash(f'Error adding activity: {str(e)}', 'error')
+
+    return redirect(url_for('activities_page'))
+
+# Backward compatibility route for portfolio
+@app.route('/portfolio')
+def portfolio_directory():
+    return redirect(url_for('activities_page'))
 
 @app.route('/students/<int:student_id>/seminars/add', methods=['POST'])
 def seminar_add(student_id):

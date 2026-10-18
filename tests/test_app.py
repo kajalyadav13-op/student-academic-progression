@@ -169,3 +169,34 @@ def test_excel_export(client):
     assert 'GapYears' in sheet_names
     assert 'Seminars' in sheet_names
     assert 'Activities' in sheet_names
+
+def test_new_navigation_routes(client):
+    # 1. Progression Chart Page
+    res_prog = client.get('/progression')
+    assert res_prog.status_code == 200
+    assert b'Progression Analytics' in res_prog.data
+    assert b'Semester Progression Curve' in res_prog.data
+
+    # 2. Academic & Marks Page
+    res_acad = client.get('/academics')
+    assert res_acad.status_code == 200
+    assert b'Academic Semesters & Subject Marks' in res_acad.data
+    assert b'Semesters Recorded' in res_acad.data
+
+    # 3. Seminars Page
+    res_sem = client.get('/seminars')
+    assert res_sem.status_code == 200
+    assert b'Seminars, Conferences & Workshops' in res_sem.data
+    assert b'Total Seminars Logged' in res_sem.data
+
+    # 4. Activities Page
+    res_act = client.get('/activities')
+    assert res_act.status_code == 200
+    assert b'Extracurricular Activities & Achievements' in res_act.data
+    assert b'Total Activities' in res_act.data
+
+    # 5. Sync Page with CDC Log Table
+    res_sync = client.get('/sync')
+    assert res_sync.status_code == 200
+    assert b'Change Data Capture (SyncLog) Table' in res_sync.data
+    assert b'Open Connected Google Sheet' in res_sync.data

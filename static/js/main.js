@@ -3,6 +3,15 @@
 // ==============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Mobile Sidebar toggle
+    const mobileBtn = document.querySelector('.mobile-menu-btn');
+    const sidebar = document.querySelector('.sidebar');
+    if (mobileBtn && sidebar) {
+        mobileBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('mobile-open');
+        });
+    }
+
     // Modal Open/Close triggers
     const modalTriggers = document.querySelectorAll('[data-modal-target]');
     const modalCloses = document.querySelectorAll('[data-modal-close]');
