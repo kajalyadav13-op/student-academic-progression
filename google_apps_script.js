@@ -17,9 +17,10 @@
  */
 
 const TARGET_SPREADSHEET_ID = "1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4";
+const SYNC_SECRET_TOKEN = "kajal-academic-sync-token-2026";
 function getSyncSecretToken() {
   var prop = PropertiesService.getScriptProperties().getProperty("SYNC_SECRET_TOKEN");
-  return prop ? prop : "875f3035d12de1f40adabf1b6da578fdc06f6bca3e593fc6";
+  return prop ? prop : SYNC_SECRET_TOKEN;
 }
 
 const SCHEMAS = {

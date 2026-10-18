@@ -1,13 +1,26 @@
 import json
+import threading
 import requests
 from datetime import datetime
 from config import Config
 from services import db
 
+def trigger_background_outbox_processing():
+    """
+    Spawns a daemon thread to process the outbox queue immediately
+    without blocking the user's web request or database transaction.
+    """
+    try:
+        thread = threading.Thread(target=process_sync_outbox, kwargs={'limit': 20}, daemon=True)
+        thread.start()
+    except Exception:
+        pass
+
 def queue_outbox_event(entity_name: str, record_id: int, operation: str, payload_dict: dict):
     """
     Saves an event into the durable sync_outbox table and logs Change Data Capture (CDC) entry.
     Ensures data saves to local DB are decoupled from Google Sheets network availability.
+    Automatically triggers background worker to process pending items.
     """
     payload_json = json.dumps(payload_dict, default=str)
     sql_outbox = """
@@ -16,7 +29,7 @@ def queue_outbox_event(entity_name: str, record_id: int, operation: str, payload
     """
     outbox_id = db.execute(sql_outbox, (entity_name, record_id, operation, payload_json))
 
-    # Also log CDC event in sync_log
+    # Also log initial CDC event in sync_log
     sql_log = """
     INSERT INTO sync_log (entity_name, record_id, operation, status, payload, retry_count)
     VALUES (%s, %s, %s, 'PENDING', %s, 0)
@@ -26,28 +39,39 @@ def queue_outbox_event(entity_name: str, record_id: int, operation: str, payload
     except Exception:
         pass
 
+    # Trigger background worker immediately
+    trigger_background_outbox_processing()
+
     return outbox_id
 
 def push_event_to_sheets(entity_name: str, operation: str, record: dict) -> dict:
     """
     Sends an individual entity event payload to Google Apps Script Web App.
+    Accurately inspects response status ('success' vs 'error').
     """
     url = Config.GOOGLE_SHEETS_WEBHOOK_URL
     if not url:
         return {'status': 'SKIPPED', 'message': 'Google Sheets webhook URL is not configured'}
 
+    record_id = record.get('id') if isinstance(record, dict) else record
+
     payload = {
         'token': Config.GOOGLE_SHEETS_SECRET_TOKEN,
         'action': 'upsert_single' if operation == 'UPSERT' else 'delete_single',
         'entity': entity_name,
+        'id': record_id,
         'data': record
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
         if response.status_code == 200:
             res_data = response.json()
-            return {'status': 'SUCCESS', 'response': res_data}
+            if res_data.get('status') == 'success':
+                return {'status': 'SUCCESS', 'response': res_data}
+            else:
+                err_msg = res_data.get('message', 'Apps Script reported error')
+                return {'status': 'FAILED', 'error': err_msg}
         else:
             return {'status': 'FAILED', 'error': f"HTTP {response.status_code}: {response.text}"}
     except Exception as e:
@@ -79,18 +103,26 @@ def push_bulk_snapshot_to_sheets() -> dict:
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=25)
+        response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
             res_data = response.json()
-            # Record in sync_log
-            db.execute("""
-                INSERT INTO sync_log (entity_name, record_id, operation, status, payload, synced_at)
-                VALUES ('ALL_TABLES', 0, 'BULK_SYNC', 'SUCCESS', %s, CURRENT_TIMESTAMP)
-            """, (f"Snapshot synced: {len(data_snapshot['Students'])} students",))
-            
-            # Mark pending outbox as SYNCED
-            db.execute("UPDATE sync_outbox SET status = 'SYNCED' WHERE status = 'PENDING'")
-            return {'status': 'SUCCESS', 'details': res_data}
+            if res_data.get('status') == 'success':
+                # Record in sync_log
+                db.execute("""
+                    INSERT INTO sync_log (entity_name, record_id, operation, status, payload, synced_at)
+                    VALUES ('ALL_TABLES', 0, 'BULK_SYNC', 'SUCCESS', %s, CURRENT_TIMESTAMP)
+                """, (f"Snapshot synced: {len(data_snapshot['Students'])} students across 7 sheets",))
+                
+                # Mark pending outbox as SYNCED
+                db.execute("UPDATE sync_outbox SET status = 'SYNCED' WHERE status = 'PENDING'")
+                return {'status': 'SUCCESS', 'details': res_data}
+            else:
+                err = res_data.get('message', 'Apps Script reported error on bulk sync')
+                db.execute("""
+                    INSERT INTO sync_log (entity_name, record_id, operation, status, error_message)
+                    VALUES ('ALL_TABLES', 0, 'BULK_SYNC', 'FAILED', %s)
+                """, (err,))
+                return {'status': 'FAILED', 'error': err}
         else:
             err = f"HTTP {response.status_code}: {response.text}"
             db.execute("""
@@ -106,7 +138,7 @@ def push_bulk_snapshot_to_sheets() -> dict:
         """, (err,))
         return {'status': 'FAILED', 'error': err}
 
-def process_sync_outbox(limit: int = 20) -> dict:
+def process_sync_outbox(limit: int = 25) -> dict:
     """
     Processes pending outbox items and pushes them to the configured webhook.
     """

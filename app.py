@@ -977,14 +977,21 @@ def sync_page():
 
 @app.route('/sync/trigger-bulk', methods=['POST'])
 def sync_trigger_bulk():
-    """Manual trigger to push a complete snapshot of all 7 relational tables to Google Sheets."""
+    """Manual trigger to process outbox queue and push a complete snapshot of all 7 relational tables to Google Sheets."""
+    # First flush pending outbox queue
+    outbox_res = google_sheets.process_sync_outbox(limit=50)
+    
+    # Then execute full snapshot sync
     res = google_sheets.push_bulk_snapshot_to_sheets()
     if res.get('status') == 'SUCCESS':
-        flash('Bulk synchronization to Google Sheets completed successfully!', 'success')
+        details = res.get('details', {})
+        counts = details.get('synced_counts', {})
+        counts_str = ', '.join([f"{k}: {v}" for k, v in counts.items()])
+        flash(f'Google Sheets sync succeeded! Updated 7 worksheets ({counts_str}).', 'success')
     elif res.get('status') == 'SKIPPED':
-        flash('Google Sheets Webhook URL is not configured in environment variables. Add GOOGLE_SHEETS_WEBHOOK_URL to enable.', 'warning')
+        flash('Google Sheets Webhook URL is not configured.', 'warning')
     else:
-        flash(f"Sync failed: {res.get('error')}", 'error')
+        flash(f"Sync error: {res.get('error')}", 'error')
 
     return redirect(url_for('sync_page'))
 

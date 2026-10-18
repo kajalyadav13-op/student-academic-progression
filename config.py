@@ -25,7 +25,7 @@ class Config:
     
     # Google Sheets Webhook Configuration
     GOOGLE_SHEETS_WEBHOOK_URL = os.environ.get('GOOGLE_SHEETS_WEBHOOK_URL', '')
-    GOOGLE_SHEETS_SECRET_TOKEN = os.environ.get('GOOGLE_SHEETS_SECRET_TOKEN', '875f3035d12de1f40adabf1b6da578fdc06f6bca3e593fc6')
+    GOOGLE_SHEETS_SECRET_TOKEN = os.environ.get('GOOGLE_SHEETS_SECRET_TOKEN', 'kajal-academic-sync-token-2026')
     GOOGLE_SHEET_URL = os.environ.get('GOOGLE_SHEET_URL', 'https://docs.google.com/spreadsheets/d/1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4/edit')
     GOOGLE_SPREADSHEET_ID = os.environ.get('GOOGLE_SPREADSHEET_ID', '1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4')
     
