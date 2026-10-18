@@ -1,18 +1,22 @@
 /**
  * Google Apps Script for Student Academic Progression & Portfolio Management System
+ * Target Google Spreadsheet: https://docs.google.com/spreadsheets/d/1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4/edit
+ * Spreadsheet ID: 1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4
  * 
- * Instructions:
- * 1. Open your target Google Sheet.
- * 2. Click Extensions -> Apps Script.
- * 3. Replace all existing code with this script.
- * 4. Update SYNC_SECRET_TOKEN below if you customized it in .env.
- * 5. Click "Deploy" -> "New deployment" -> Select type "Web app".
- * 6. Set Description: "Student Academic Progression Sync Webhook".
+ * Deployment Instructions:
+ * 1. Open the spreadsheet: https://docs.google.com/spreadsheets/d/1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4/edit
+ * 2. In the menu, click Extensions -> Apps Script.
+ * 3. Replace all code with this file.
+ * 4. Click "Deploy" (top right) -> "New deployment".
+ * 5. Click the gear icon next to "Select type" and select "Web app".
+ * 6. Set Description: "Student Academic Progression Webhook".
  * 7. Set "Execute as": "Me".
- * 8. Set "Who has access": "Anyone" (Security is enforced via SYNC_SECRET_TOKEN inside the script).
- * 9. Click "Deploy", authorize access, and copy the Web App URL into your .env as GOOGLE_SHEETS_WEBHOOK_URL.
+ * 8. Set "Who has access": "Anyone".
+ * 9. Click "Deploy", authorize permissions when prompted.
+ * 10. Copy the Web App URL (starts with https://script.google.com/macros/s/...) and paste it in chat.
  */
 
+const TARGET_SPREADSHEET_ID = "1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4";
 const SYNC_SECRET_TOKEN = "kajal-academic-sync-token-2026";
 
 const SCHEMAS = {
@@ -24,6 +28,17 @@ const SCHEMAS = {
   Seminars: ["id", "student_id", "title", "organizer", "event_date", "participation_type", "certificate_details", "created_at"],
   Activities: ["id", "student_id", "title", "category", "description", "event_date", "achievement", "certificate_details", "created_at"]
 };
+
+function getTargetSpreadsheet() {
+  try {
+    if (TARGET_SPREADSHEET_ID) {
+      return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+    }
+  } catch (err) {
+    // Fallback to active spreadsheet if opened container-bound
+  }
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
 
 function doPost(e) {
   try {
@@ -38,9 +53,14 @@ function doPost(e) {
       return jsonResponse({ status: "error", message: "Unauthorized: Invalid or missing sync token" }, 401);
     }
     
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getTargetSpreadsheet();
+    if (!ss) {
+      return jsonResponse({ status: "error", message: "Unable to access target spreadsheet" }, 500);
+    }
+    
     const action = payload.action;
     
+    // Action 1: Bulk Synchronization of all 7 relational tables
     if (action === "bulk_sync") {
       const results = {};
       const tables = payload.tables || {};
@@ -65,11 +85,13 @@ function doPost(e) {
       return jsonResponse({
         status: "success",
         message: "Bulk synchronization completed successfully",
+        spreadsheet_id: ss.getId(),
         synced_counts: results,
         timestamp: new Date().toISOString()
       });
     }
     
+    // Action 2: Upsert single record (idempotent update by ID or append)
     if (action === "upsert_single") {
       const entity = payload.entity;
       const data = payload.data;
@@ -105,6 +127,7 @@ function doPost(e) {
       }
     }
     
+    // Action 3: Delete single record by ID
     if (action === "delete_single") {
       const entity = payload.entity;
       const idVal = payload.data ? payload.data.id : payload.id;
@@ -136,9 +159,11 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  const ss = getTargetSpreadsheet();
   return ContentService.createTextOutput(JSON.stringify({
     service: "Student Academic Progression Sheets Webhook",
     status: "active",
+    spreadsheet_id: ss ? ss.getId() : TARGET_SPREADSHEET_ID,
     sheets: Object.keys(SCHEMAS),
     timestamp: new Date().toISOString()
   })).setMimeType(ContentService.MimeType.JSON);
