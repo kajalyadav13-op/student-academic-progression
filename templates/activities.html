@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio: Seminars & Activities &bull; Academic Progression System{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <h1 style="font-size: 1.6rem; font-weight: 800; color: var(--text-main);">Seminars & Extracurricular Portfolio</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Track conferences, hackathons, publications, and co-curricular achievements</p>
+    </div>
+    <div style="display: flex; gap: 0.75rem;">
+        <a href="{{ url_for('export_excel_file') }}" class="btn btn-secondary">Export to Excel</a>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1.25rem;">
+    <form method="GET" action="{{ url_for('portfolio_directory') }}" style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
+        <div style="flex: 1; min-width: 180px;">
+            <label class="form-label" style="font-size: 0.8rem;">Filter by Category</label>
+            <select name="category" class="form-control">
+                <option value="">All Categories</option>
+                <option value="Technical" {% if current_category == 'Technical' %}selected{% endif %}>Technical</option>
+                <option value="Hackathon" {% if current_category == 'Hackathon' %}selected{% endif %}>Hackathon</option>
+                <option value="Sports" {% if current_category == 'Sports' %}selected{% endif %}>Sports</option>
+                <option value="Cultural" {% if current_category == 'Cultural' %}selected{% endif %}>Cultural</option>
+                <option value="Social/NSS" {% if current_category == 'Social/NSS' %}selected{% endif %}>Social / NSS</option>
+            </select>
+        </div>
+        <div style="flex: 1; min-width: 200px;">
+            <label class="form-label" style="font-size: 0.8rem;">Filter by Student</label>
+            <select name="student_id" class="form-control">
+                <option value="">All Students</option>
+                {% for st in all_students %}
+                <option value="{{ st.id }}" {% if current_student_id == st.id|string %}selected{% endif %}>{{ st.full_name }} ({{ st.student_code }})</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+            <button type="submit" class="btn btn-secondary">Filter</button>
+            {% if current_category or current_student_id %}
+            <a href="{{ url_for('portfolio_directory') }}" class="btn btn-secondary" style="color: var(--text-muted);">Reset</a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<!-- Extracurricular Activities Table -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title" style="font-size: 1.15rem;">Extracurricular Activities & Competitions</h2>
+    </div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Activity Title</th>
+                    <th>Category</th>
+                    <th>Description</th>
+                    <th>Date</th>
+                    <th>Achievement</th>
+                    <th>Certificate</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for act in activities %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('student_profile', student_id=act.student_id) }}" style="color: var(--primary); font-weight: 600; text-decoration: none;">
+                            {{ act.full_name }}
+                        </a>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">{{ act.student_code }}</div>
+                    </td>
+                    <td><strong>{{ act.title }}</strong></td>
+                    <td><span class="badge badge-active">{{ act.category }}</span></td>
+                    <td style="color: var(--text-muted); font-size: 0.85rem; max-width: 250px;">{{ act.description or '—' }}</td>
+                    <td>{{ act.event_date }}</td>
+                    <td><span class="badge badge-grade">{{ act.achievement or 'Participant' }}</span></td>
+                    <td><code>{{ act.certificate_details or 'None' }}</code></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                        No extracurricular activities found matching criteria.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Seminars & Conferences Table -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title" style="font-size: 1.15rem;">Seminars, Workshops & Conferences</h2>
+    </div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Student</th>
+                    <th>Seminar / Conference Title</th>
+                    <th>Organizer</th>
+                    <th>Participation Role</th>
+                    <th>Date</th>
+                    <th>Certificate Ref</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for sem in seminars %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('student_profile', student_id=sem.student_id) }}" style="color: var(--primary); font-weight: 600; text-decoration: none;">
+                            {{ sem.full_name }}
+                        </a>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">{{ sem.student_code }}</div>
+                    </td>
+                    <td><strong>{{ sem.title }}</strong></td>
+                    <td>{{ sem.organizer }}</td>
+                    <td><span class="badge badge-grade">{{ sem.participation_type }}</span></td>
+                    <td>{{ sem.event_date }}</td>
+                    <td><code>{{ sem.certificate_details or 'None' }}</code></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                        No seminars found matching criteria.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

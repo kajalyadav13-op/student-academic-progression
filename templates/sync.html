@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Google Sheets Synchronization &bull; Academic Progression System{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+    <div>
+        <h1 style="font-size: 1.6rem; font-weight: 800; color: var(--text-main);">Google Sheets Synchronization</h1>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Durable outbox queue architecture ensuring non-blocking database saves and spreadsheet alignment</p>
+    </div>
+    <div style="display: flex; gap: 0.75rem;">
+        <form method="POST" action="{{ url_for('sync_trigger_bulk') }}">
+            <button type="submit" class="btn btn-primary" title="Exports current database state across all 7 sheets">Bulk Sync All 7 Tables Now</button>
+        </form>
+        <form method="POST" action="{{ url_for('sync_process_outbox') }}">
+            <button type="submit" class="btn btn-secondary">Process Outbox Queue</button>
+        </form>
+    </div>
+</div>
+
+<!-- Integration Status Banner -->
+<div class="card" style="margin-bottom: 1.5rem; border-left: 4px solid {% if sync_status.is_configured %}var(--accent){% else %}var(--warning){% endif %};">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="font-size: 0.85rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted);">Sync Service Status</div>
+            <div style="font-size: 1.35rem; font-weight: 800; color: {% if sync_status.is_configured %}#065f46{% else %}#92400e{% endif %};">
+                {% if sync_status.is_configured %}
+                    &check; Active &bull; Connected to Webhook
+                {% else %}
+                    &excl; Pending Configuration (Local Queue Mode)
+                {% endif %}
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">
+                Endpoint: <code>{{ sync_status.webhook_url_masked }}</code>
+            </div>
+        </div>
+        <div style="display: flex; gap: 1.5rem;">
+            <div style="text-align: right;">
+                <span class="stat-title">Pending Outbox</span>
+                <div style="font-size: 1.5rem; font-weight: 700; color: {% if sync_status.pending_count > 0 %}var(--warning){% else %}var(--text-main){% endif %};">
+                    {{ sync_status.pending_count }}
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <span class="stat-title">Failed Syncs</span>
+                <div style="font-size: 1.5rem; font-weight: 700; color: {% if sync_status.failed_count > 0 %}var(--danger){% else %}var(--text-main){% endif %};">
+                    {{ sync_status.failed_count }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- How it Works Architecture Alert -->
+<div class="card" style="background-color: var(--bg-muted); margin-bottom: 1.5rem;">
+    <h3 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.4rem;">How the Reliable Save Flow Works:</h3>
+    <ol style="margin-left: 1.25rem; font-size: 0.875rem; color: var(--text-muted); line-height: 1.6;">
+        <li>When a student or academic record is saved, the Flask backend validates and commits immediately to the SQL database.</li>
+        <li>An asynchronous record is automatically registered into the <strong>durable <code>sync_outbox</code> table</strong>.</li>
+        <li>The user experiences instant response times without waiting for Google Apps Script network roundtrips.</li>
+        <li>The Google Apps Script webhook receives updates and performs idempotent upserts based on table primary keys.</li>
+    </ol>
+</div>
+
+<!-- Recent Sync Audit Trail -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title" style="font-size: 1.15rem;">Real-time Synchronization Audit Trail</h2>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Last 15 Sync Events</span>
+    </div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Entity Table</th>
+                    <th>Record ID</th>
+                    <th>Operation</th>
+                    <th>Status</th>
+                    <th>Details / Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in sync_status.recent_logs %}
+                <tr>
+                    <td style="white-space: nowrap; font-size: 0.8rem; color: var(--text-muted);">{{ log.created_at }}</td>
+                    <td><strong>{{ log.entity_name }}</strong></td>
+                    <td><code>#{{ log.record_id }}</code></td>
+                    <td><span class="badge" style="background: var(--bg-muted);">{{ log.operation }}</span></td>
+                    <td>
+                        <span class="badge {% if log.status == 'SUCCESS' %}badge-active{% elif log.status == 'FAILED' %}badge-danger{% else %}badge-onleave{% endif %}">
+                            {{ log.status }}
+                        </span>
+                    </td>
+                    <td style="font-size: 0.85rem; color: var(--text-muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {% if log.error_message %}
+                            <span style="color: var(--danger);">{{ log.error_message }}</span>
+                        {% else %}
+                            {{ log.payload or 'Synced cleanly' }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                        No synchronization operations logged yet.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Deployment Guide for Google Apps Script -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2 class="card-title" style="font-size: 1.15rem;">Google Sheets Setup Guide</h2>
+    </div>
+    <div style="font-size: 0.875rem; color: var(--text-main); line-height: 1.6;">
+        <p style="margin-bottom: 0.75rem;">To connect your Google Sheet to this system in under 2 minutes:</p>
+        <ol style="margin-left: 1.25rem; color: var(--text-muted);">
+            <li>Open your Google Spreadsheet (or create a blank one).</li>
+            <li>In the menu, click <strong>Extensions &rarr; Apps Script</strong>.</li>
+            <li>Paste the contents of <code>google_apps_script.js</code> (included in this repository) into the editor.</li>
+            <li>Click <strong>Deploy &rarr; New deployment &rarr; Web app</strong>.</li>
+            <li>Set <em>Execute as: "Me"</em> and <em>Who has access: "Anyone"</em>.</li>
+            <li>Copy the generated Web App URL and add it to your environment variables as <code>GOOGLE_SHEETS_WEBHOOK_URL</code>.</li>
+        </ol>
+    </div>
+</div>
+{% endblock %}
