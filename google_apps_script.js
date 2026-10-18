@@ -17,7 +17,10 @@
  */
 
 const TARGET_SPREADSHEET_ID = "1v9Uw0ygAlp_TuobYlUeOkv6gDKXfXbD3Ia4ukNYryw4";
-const SYNC_SECRET_TOKEN = "kajal-academic-sync-token-2026";
+function getSyncSecretToken() {
+  var prop = PropertiesService.getScriptProperties().getProperty("SYNC_SECRET_TOKEN");
+  return prop ? prop : "875f3035d12de1f40adabf1b6da578fdc06f6bca3e593fc6";
+}
 
 const SCHEMAS = {
   Students: ["id", "student_code", "full_name", "email", "admission_year", "current_status", "created_at", "updated_at"],
@@ -49,7 +52,8 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     
     // Authenticate token
-    if (!payload.token || payload.token !== SYNC_SECRET_TOKEN) {
+    var expectedToken = getSyncSecretToken();
+    if (!payload.token || payload.token !== expectedToken) {
       return jsonResponse({ status: "error", message: "Unauthorized: Invalid or missing sync token" }, 401);
     }
     
